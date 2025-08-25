@@ -1,4 +1,7 @@
 # Variables globales pour stocker l'analyse IA et l'état de chargement
+import re
+
+
 ai_analysis_cache = {}
 is_analyzing = {}
 analysis_results = {}
@@ -10,15 +13,18 @@ def store_ai_analysis(expected_provided_tuple, type_pattern):
     true_answer = expected_provided_tuple[0] or ""
     user_answer = expected_provided_tuple[1] or ""
     
-    # Créer une clé unique pour cette comparaison
-    cache_key = f"{hash(true_answer)}_{hash(user_answer)}"
+    # **NOUVEAU: Récupérer le contenu de la carte actuelle**
+    question_text = get_current_question()
+    
+    # Créer une clé unique pour cette comparaison (inclut maintenant la question)
+    cache_key = f"{hash(question_text)}_{hash(true_answer)}_{hash(user_answer)}"
     
     # Vérifier si l'analyse existe déjà
     if cache_key in ai_analysis_cache:
         print(f"Using cached analysis for {cache_key}")
         return expected_provided_tuple
     
-    # **FIX 1: Éviter les appels multiples avec un verrou simple**
+    # Éviter les appels multiples avec un verrou simple
     if is_analyzing.get(cache_key, False):
         print(f"Analysis already in progress for {cache_key}")
         return expected_provided_tuple
@@ -28,10 +34,11 @@ def store_ai_analysis(expected_provided_tuple, type_pattern):
     analysis_results[cache_key] = None
     print(f"Starting AI analysis for key: {cache_key}")
     
-    # **FIX 2: Analyse synchrone au lieu d'asynchrone pour éviter les problèmes de threading**
+    # Analyse synchrone au lieu d'asynchrone pour éviter les problèmes de threading
     try:
         print(f"Calling AI API for analysis...")
-        ai_analysis = analyze_answer_with_ai(true_answer, user_answer)
+        # **MODIFIÉ: Passer la question à l'analyse IA**
+        ai_analysis = analyze_answer_with_ai(question_text, true_answer, user_answer)
         analysis_results[cache_key] = ai_analysis
         ai_analysis_cache[cache_key] = ai_analysis
         print(f"AI analysis completed successfully for {cache_key}")
@@ -48,6 +55,59 @@ def store_ai_analysis(expected_provided_tuple, type_pattern):
     # Retourner les réponses inchangées pour la comparaison normale
     return expected_provided_tuple
 
+def clean_html_content(html_content):
+    """
+    Nettoie le contenu HTML pour extraire le texte brut, 
+    en supprimant les balises HTML, le CSS et le JavaScript.
+    """
+    if not html_content:
+        return ""
+    
+    # 1. Supprimer les blocs de script et de style
+    # L'option re.DOTALL permet au '.' de correspondre aussi aux sauts de ligne
+    text = re.sub(r'<script.*?</script>', '', html_content, flags=re.DOTALL)
+    text = re.sub(r'<style.*?</style>', '', text, flags=re.DOTALL)
+    
+    # 2. Supprimer les balises HTML restantes
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # 3. Remplacer les entités HTML communes
+    text = text.replace('&nbsp;', ' ')
+    text = text.replace('&lt;', '<')
+    text = text.replace('&gt;', '>')
+    text = text.replace('&amp;', '&')
+    text = text.replace('&quot;', '"')
+    
+    # 4. Nettoyer les espaces multiples et les sauts de ligne
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
+
+def get_current_question():
+    """
+    **NOUVELLE FONCTION: Récupère le contenu de la question de la carte actuelle**
+    """
+    try:
+        if hasattr(mw, 'reviewer') and mw.reviewer and hasattr(mw.reviewer, 'card') and mw.reviewer.card:
+            card = mw.reviewer.card
+            
+            # Récupérer le contenu de la question (front de la carte)
+            question_html = card.question()
+            
+            # Nettoyer le HTML pour extraire le texte
+            question_text = clean_html_content(question_html)
+            
+            print(f"Current question extracted: {question_text[:100]}...")
+            return question_text
+        else:
+            print("No current card available")
+            return ""
+    except Exception as e:
+        print(f"Error getting current question: {e}")
+        return ""
+
+
+
 def render_enhanced_comparison(output, initial_expected, initial_provided, type_pattern):
     """
     Améliore l'affichage de la comparaison avec l'analyse IA
@@ -60,14 +120,15 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
     if not config.get("enabled", True):
         return output
     
-    # Créer la clé de cache
-    cache_key = f"{hash(initial_expected)}_{hash(initial_provided)}"
+    # **MODIFIÉ: Inclure la question dans la clé de cache**
+    question_text = get_current_question()
+    cache_key = f"{hash(question_text)}_{hash(initial_expected)}_{hash(initial_provided)}"
     print(f"Rendering comparison for key: {cache_key}")
     
-    # **FIX 3: Vérification simplifiée - si l'analyse est en cours, afficher un message simple**
+    # Vérification simplifiée - si l'analyse est en cours, afficher un message simple
     if is_analyzing.get(cache_key, False) and cache_key not in ai_analysis_cache:
         print(f"Analysis in progress for {cache_key}, showing simple loading message")
-        # **FIX 4: Message de chargement simple sans JavaScript compliqué**
+        # Message de chargement simple sans JavaScript compliqué
         spinner_output = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto;">
             
@@ -93,7 +154,7 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
         """
         return spinner_output
     
-    # **FIX 5: Récupérer l'analyse IA stockée avec debug**
+    # Récupérer l'analyse IA stockée avec debug
     ai_analysis = analysis_results.get(cache_key) or ai_analysis_cache.get(cache_key)
     print(f"Retrieved analysis for {cache_key}: {ai_analysis is not None}")
     
@@ -139,7 +200,23 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
     }
     suggestion_color, suggestion_bg, suggestion_icon = suggestion_colors.get(suggestion, ("#4caf50", "#e8f5e8", "👍"))
     
-    # **FIX 6: Affichage simplifié des résultats**
+    # **NOUVEAU: Afficher la question pour plus de contexte si elle existe**
+    question_display = ""
+    if question_text and len(question_text.strip()) > 0:
+        # Limiter la longueur de la question affichée
+        display_question = question_text[:200] + "..." if len(question_text) > 200 else question_text
+        question_display = f"""
+        <div style="background: rgba(255,255,255,0.9); border: 2px solid #e0e0e0; border-radius: 12px; padding: 15px; margin-bottom: 15px;">
+            <h4 style="color: #2c3e50; margin: 0 0 8px 0; font-size: 16px; font-weight: 700; display: flex; align-items: center;">
+                ❓ {texts.get('question_context', 'Question Context')}:
+            </h4>
+            <p style="color: #34495e; margin: 0; line-height: 1.4; font-size: 14px; font-style: italic;">
+                {display_question}
+            </p>
+        </div>
+        """
+    
+    # Affichage simplifié des résultats
     enhanced_output = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto;">
         
@@ -165,6 +242,8 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
                 </div>
             </div>
             
+            {question_display}
+            
             <div style="margin-bottom: 20px; padding: 15px; background: rgba(255,255,255,0.7); border-radius: 12px; border-left: 4px solid {score_color};">
                 <h4 style="color: #2c3e50; margin: 0 0 10px 0; font-size: clamp(15px, 4vw, 17px); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; display: flex; align-items: center;">
                     💡 {texts.get('improvement_tips', 'Improvement Tips')}
@@ -188,7 +267,7 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
     </div>
     """
     
-    # **FIX 7: Nettoyer les caches plus prudemment**
+    # Nettoyer les caches plus prudemment
     cleanup_old_cache_entries()
     
     return enhanced_output
@@ -207,7 +286,6 @@ def cleanup_old_cache_entries():
     except Exception as e:
         print(f"Error during cache cleanup: {e}")
 
-# **FIX 8: Fonction pour débugger l'état des caches**
 def debug_cache_state():
     """Debug la situation actuelle des caches"""
     print("=== CACHE STATE DEBUG ===")
@@ -217,7 +295,6 @@ def debug_cache_state():
     print(f"Currently analyzing: {[k for k, v in is_analyzing.items() if v]}")
     print("========================")
 
-# **FIX 9: Réinitialiser les caches au démarrage**
 def reset_ai_caches():
     """Réinitialise tous les caches"""
     global ai_analysis_cache, is_analyzing, analysis_results
@@ -254,13 +331,14 @@ DEFAULT_CONFIG = {
     "temperature": 0.7
 }
 
-# Langues supportées et leurs textes
+# **MODIFIÉ: Langues supportées avec nouveau texte pour le contexte de question**
 LANGUAGES = {
     "english": {
         "name": "English",
         "ai_analysis": "AI Analysis",
         "improvement_tips": "Improvement Tips",
         "review_suggestion": "Review Suggestion",
+        "question_context": "Question Context",
         "analyzing": "AI Analysis in progress...",
         "please_wait": "Please wait while the AI evaluates your answer",
         "processing_response": "Processing your response...",
@@ -278,6 +356,7 @@ LANGUAGES = {
         "ai_analysis": "Analyse IA",
         "improvement_tips": "Conseils d'amélioration",
         "review_suggestion": "Suggestion de révision",
+        "question_context": "Contexte de la question",
         "analyzing": "Analyse IA en cours...",
         "please_wait": "Veuillez patienter pendant que l'IA évalue votre réponse",
         "processing_response": "Traitement de votre réponse...",
@@ -295,6 +374,7 @@ LANGUAGES = {
         "ai_analysis": "Análisis IA",
         "improvement_tips": "Consejos de mejora",
         "review_suggestion": "Sugerencia de revisión",
+        "question_context": "Contexto de la pregunta",
         "analyzing": "Análisis IA en progreso...",
         "please_wait": "Por favor espera mientras la IA evalúa tu respuesta",
         "processing_response": "Procesando tu respuesta...",
@@ -312,6 +392,7 @@ LANGUAGES = {
         "ai_analysis": "KI-Analyse",
         "improvement_tips": "Verbesserungstipps",
         "review_suggestion": "Wiederholungsvorschlag",
+        "question_context": "Fragenkontext",
         "analyzing": "KI-Analyse läuft...",
         "please_wait": "Bitte warten Sie, während die KI Ihre Antwort bewertet",
         "processing_response": "Ihre Antwort wird verarbeitet...",
@@ -533,21 +614,23 @@ def call_ai_api(messages, provider="openai", model="gpt-3.5-turbo", max_tokens=2
     except Exception as e:
         raise Exception(f"Erreur inattendue: {str(e)}")
 
-
-def get_language_specific_prompt(language, true_answer, user_answer):
-    """Génère un prompt selon la langue configurée"""
+def get_language_specific_prompt(language, question_text, true_answer, user_answer):
+    """
+    **MODIFIÉ: Génère un prompt selon la langue configurée avec contexte de question**
+    """
     
     prompts = {
         "english": f"""
-        Analyze the student's answer compared to the expected answer and provide a structured evaluation.
+        Analyze the student's answer in the context of the given question and provide a structured evaluation.
 
+        Question: "{question_text}"
         Expected answer: "{true_answer}"
         Student's answer: "{user_answer}"
 
         Please provide your evaluation in the following JSON format:
         {{
             "score": [number from 0 to 10],
-            "tips": "[constructive feedback in English, maximum 100 words]",
+            "tips": "[constructive feedback in English, maximum 100 words, considering the question context]",
             "review_suggestion": "[choose from: Again, Hard, Good, Easy]"
         }}
 
@@ -556,18 +639,21 @@ def get_language_specific_prompt(language, true_answer, user_answer):
         - Score 4-5: Partially correct but with significant errors → "Hard"  
         - Score 6-8: Correct answer with minor imperfections → "Good"
         - Score 9-10: Excellent and complete answer → "Easy"
+        
+        Consider the question context when evaluating the relevance and completeness of the student's response.
         """,
         
         "french": f"""
-        Analysez la réponse de l'étudiant par rapport à la réponse attendue et fournissez une évaluation structurée.
+        Analysez la réponse de l'étudiant dans le contexte de la question donnée et fournissez une évaluation structurée.
 
+        Question: "{question_text}"
         Réponse attendue: "{true_answer}"
         Réponse de l'étudiant: "{user_answer}"
 
         Veuillez fournir votre évaluation au format JSON suivant:
         {{
             "score": [nombre de 0 à 10],
-            "tips": "[conseils constructifs en français, maximum 100 mots]",
+            "tips": "[conseils constructifs en français, maximum 100 mots, en tenant compte du contexte de la question]",
             "review_suggestion": "[choisir parmi: Again, Hard, Good, Easy]"
         }}
 
@@ -576,18 +662,21 @@ def get_language_specific_prompt(language, true_answer, user_answer):
         - Score 4-5: Réponse partiellement correcte mais avec des erreurs importantes → "Hard"  
         - Score 6-8: Réponse correcte avec quelques imperfections mineures → "Good"
         - Score 9-10: Réponse excellente et complète → "Easy"
+        
+        Considérez le contexte de la question lors de l'évaluation de la pertinence et de la complétude de la réponse de l'étudiant.
         """,
         
         "spanish": f"""
-        Analiza la respuesta del estudiante comparada con la respuesta esperada y proporciona una evaluación estructurada.
+        Analiza la respuesta del estudiante en el contexto de la pregunta dada y proporciona una evaluación estructurada.
 
+        Pregunta: "{question_text}"
         Respuesta esperada: "{true_answer}"
         Respuesta del estudiante: "{user_answer}"
 
         Por favor proporciona tu evaluación en el siguiente formato JSON:
         {{
             "score": [número del 0 al 10],
-            "tips": "[comentarios constructivos en español, máximo 100 palabras]",
+            "tips": "[comentarios constructivos en español, máximo 100 palabras, considerando el contexto de la pregunta]",
             "review_suggestion": "[elegir entre: Again, Hard, Good, Easy]"
         }}
 
@@ -596,18 +685,21 @@ def get_language_specific_prompt(language, true_answer, user_answer):
         - Puntuación 4-5: Respuesta parcialmente correcta pero con errores significativos → "Hard"
         - Puntuación 6-8: Respuesta correcta con imperfecciones menores → "Good"
         - Puntuación 9-10: Respuesta excelente y completa → "Easy"
+        
+        Considera el contexto de la pregunta al evaluar la relevancia y completitud de la respuesta del estudiante.
         """,
         
         "german": f"""
-        Analysieren Sie die Antwort des Studenten im Vergleich zur erwarteten Antwort und geben Sie eine strukturierte Bewertung ab.
+        Analysieren Sie die Antwort des Studenten im Kontext der gegebenen Frage und geben Sie eine strukturierte Bewertung ab.
 
+        Frage: "{question_text}"
         Erwartete Antwort: "{true_answer}"
         Antwort des Studenten: "{user_answer}"
 
         Bitte geben Sie Ihre Bewertung im folgenden JSON-Format an:
         {{
             "score": [Zahl von 0 bis 10],
-            "tips": "[konstruktives Feedback auf Deutsch, maximal 100 Wörter]",
+            "tips": "[konstruktives Feedback auf Deutsch, maximal 100 Wörter, unter Berücksichtigung des Fragenkontexts]",
             "review_suggestion": "[wählen Sie aus: Again, Hard, Good, Easy]"
         }}
 
@@ -616,14 +708,16 @@ def get_language_specific_prompt(language, true_answer, user_answer):
         - Punktzahl 4-5: Teilweise richtige Antwort, aber mit erheblichen Fehlern → "Hard"
         - Punktzahl 6-8: Richtige Antwort mit kleineren Unvollkommenheiten → "Good"
         - Punktzahl 9-10: Ausgezeichnete und vollständige Antwort → "Easy"
+        
+        Berücksichtigen Sie den Fragenkontext bei der Bewertung der Relevanz und Vollständigkeit der studentischen Antwort.
         """
     }
     
     return prompts.get(language, prompts["english"])
 
-def analyze_answer_with_ai(true_answer: str, user_answer: str) -> dict:
+def analyze_answer_with_ai(question_text: str, true_answer: str, user_answer: str) -> dict:
     """
-    Analyse la réponse de l'utilisateur avec l'IA
+    **MODIFIÉ: Analyse la réponse de l'utilisateur avec l'IA en incluant le contexte de la question**
     Retourne un dictionnaire avec le score, les conseils et la suggestion de révision
     """
     config = get_config()
@@ -640,15 +734,15 @@ def analyze_answer_with_ai(true_answer: str, user_answer: str) -> dict:
     if not api_key:
         return {"score": 5, "tips": f"Clé API {PROVIDERS[provider]['name']} non configurée", "review_suggestion": "Good"}
     
-    # Utiliser le prompt selon la langue configurée
-    prompt = get_language_specific_prompt(language, true_answer, user_answer)
+    # **MODIFIÉ: Utiliser le prompt avec contexte de question selon la langue configurée**
+    prompt = get_language_specific_prompt(language, question_text, true_answer, user_answer)
     
     # Message système selon la langue
     system_messages = {
-        "english": "You are an educational assistant that evaluates student responses constructively and kindly.",
-        "french": "Vous êtes un assistant pédagogique qui évalue les réponses des étudiants de manière constructive et bienveillante.",
-        "spanish": "Eres un asistente educativo que evalúa las respuestas de los estudiantes de manera constructiva y amable.",
-        "german": "Sie sind ein pädagogischer Assistent, der die Antworten der Studenten konstruktiv und freundlich bewertet."
+        "english": "You are an educational assistant that evaluates student responses constructively and kindly. Use the question context to provide more accurate and relevant feedback.",
+        "french": "Vous êtes un assistant pédagogique qui évalue les réponses des étudiants de manière constructive et bienveillante. Utilisez le contexte de la question pour fournir des commentaires plus précis et pertinents.",
+        "spanish": "Eres un asistente educativo que evalúa las respuestas de los estudiantes de manera constructiva y amable. Usa el contexto de la pregunta para proporcionar comentarios más precisos y relevantes.",
+        "german": "Sie sind ein pädagogischer Assistent, der die Antworten der Studenten konstruktiv und freundlich bewertet. Nutzen Sie den Fragenkontext, um genauere und relevantere Rückmeldungen zu geben."
     }
     
     system_message = system_messages.get(language, system_messages["english"])
