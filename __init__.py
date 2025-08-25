@@ -349,9 +349,7 @@ from aqt import gui_hooks, mw
 from aqt.utils import showInfo, showWarning
 import json
 import urllib.request
-import urllib.parse
 import urllib.error
-from typing import Tuple, Optional
 
 # Configuration par défaut
 DEFAULT_CONFIG = {

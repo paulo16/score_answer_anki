@@ -1,0 +1,11 @@
+{
+  "package": "score_answer",
+  "name": "AI Answer Scorer",
+  "mod": 1724496000,
+  "author": "paulo16",
+  "version": "1.0.0",
+  "homepage": "https://github.com/paulo16/score_answer_anki",
+  "ankiweb_id": null,
+  "description": "An Anki add-on that scores typed answers and provides feedback.",
+  "tags": ["anki", "addon", "ai", "score"]
+}
