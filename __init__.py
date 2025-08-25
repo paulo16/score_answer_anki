@@ -15,45 +15,35 @@ def store_ai_analysis(expected_provided_tuple, type_pattern):
     
     # Vérifier si l'analyse existe déjà
     if cache_key in ai_analysis_cache:
+        print(f"Using cached analysis for {cache_key}")
+        return expected_provided_tuple
+    
+    # **FIX 1: Éviter les appels multiples avec un verrou simple**
+    if is_analyzing.get(cache_key, False):
+        print(f"Analysis already in progress for {cache_key}")
         return expected_provided_tuple
     
     # Marquer comme en cours d'analyse
     is_analyzing[cache_key] = True
     analysis_results[cache_key] = None
+    print(f"Starting AI analysis for key: {cache_key}")
     
-    # Lancer l'analyse en arrière-plan
-    import threading
-    
-    def analyze_in_background():
-        try:
-            ai_analysis = analyze_answer_with_ai(true_answer, user_answer)
-            analysis_results[cache_key] = ai_analysis
-            ai_analysis_cache[cache_key] = ai_analysis
-            
-            # Force refresh the UI after analysis is complete
-            from aqt import mw
-            if hasattr(mw, 'reviewer') and mw.reviewer and hasattr(mw.reviewer, 'card') and mw.reviewer.card:
-                # Schedule UI update on main thread
-                def update_ui():
-                    if hasattr(mw.reviewer, '_showAnswer'):
-                        mw.reviewer._showAnswer()
-                
-                # Use QTimer for thread-safe UI updates
-                from aqt.qt import QTimer
-                QTimer.singleShot(100, update_ui)
-                
-        except Exception as e:
-            # En cas d'erreur, stocker un résultat par défaut
-            default_result = {"score": 5, "tips": f"Analysis error: {str(e)}", "review_suggestion": "Good"}
-            analysis_results[cache_key] = default_result
-            ai_analysis_cache[cache_key] = default_result
-            print(f"AI Analysis Error: {str(e)}")  # Pour debugging
-        finally:
-            is_analyzing[cache_key] = False
-    
-    # Démarrer l'analyse en arrière-plan
-    thread = threading.Thread(target=analyze_in_background, daemon=True)
-    thread.start()
+    # **FIX 2: Analyse synchrone au lieu d'asynchrone pour éviter les problèmes de threading**
+    try:
+        print(f"Calling AI API for analysis...")
+        ai_analysis = analyze_answer_with_ai(true_answer, user_answer)
+        analysis_results[cache_key] = ai_analysis
+        ai_analysis_cache[cache_key] = ai_analysis
+        print(f"AI analysis completed successfully for {cache_key}")
+        
+    except Exception as e:
+        # En cas d'erreur, stocker un résultat par défaut
+        default_result = {"score": 5, "tips": f"Analysis error: {str(e)}", "review_suggestion": "Good"}
+        analysis_results[cache_key] = default_result
+        ai_analysis_cache[cache_key] = default_result
+        print(f"AI Analysis Error for {cache_key}: {str(e)}")
+    finally:
+        is_analyzing[cache_key] = False
     
     # Retourner les réponses inchangées pour la comparaison normale
     return expected_provided_tuple
@@ -72,10 +62,12 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
     
     # Créer la clé de cache
     cache_key = f"{hash(initial_expected)}_{hash(initial_provided)}"
+    print(f"Rendering comparison for key: {cache_key}")
     
-    # Vérifier si l'analyse est en cours
+    # **FIX 3: Vérification simplifiée - si l'analyse est en cours, afficher un message simple**
     if is_analyzing.get(cache_key, False) and cache_key not in ai_analysis_cache:
-        # Afficher le loader avec auto-refresh amélioré
+        print(f"Analysis in progress for {cache_key}, showing simple loading message")
+        # **FIX 4: Message de chargement simple sans JavaScript compliqué**
         spinner_output = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto;">
             
@@ -84,127 +76,30 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
                 {output}
             </div>
             
-            <!-- Loader animé -->
-            <div id="ai-loader-{abs(hash(cache_key))}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; border-radius: 16px; padding: 25px; margin: 20px 0; text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.1); position: relative; overflow: hidden;">
-                
-                <!-- Animation de fond -->
-                <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: linear-gradient(45deg, transparent 30%, rgba(255,255,255,0.1) 50%, transparent 70%); animation: shimmer 2s infinite; transform: translateX(-100%);"></div>
-                
-                <!-- Contenu principal -->
-                <div style="position: relative; z-index: 2;">
-                    <!-- Spinner principal -->
-                    <div style="display: inline-block; margin-bottom: 20px;">
-                        <div style="width: 50px; height: 50px; border: 4px solid rgba(255,255,255,0.3); border-top: 4px solid white; border-radius: 50%; animation: spin 1.2s linear infinite; margin: 0 auto;"></div>
-                    </div>
-                    
-                    <!-- Points animés -->
-                    <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 15px;">
-                        <div style="width: 8px; height: 8px; background: white; border-radius: 50%; margin: 0 3px; animation: bounce 1.4s infinite; animation-delay: 0s;"></div>
-                        <div style="width: 8px; height: 8px; background: white; border-radius: 50%; margin: 0 3px; animation: bounce 1.4s infinite; animation-delay: 0.2s;"></div>
-                        <div style="width: 8px; height: 8px; background: white; border-radius: 50%; margin: 0 3px; animation: bounce 1.4s infinite; animation-delay: 0.4s;"></div>
-                    </div>
-                    
-                    <h3 style="color: white; margin: 0 0 8px 0; font-size: 20px; font-weight: 600; text-shadow: 0 2px 4px rgba(0,0,0,0.3);">
-                        🤖 {texts['analyzing']}
-                    </h3>
-                    <p style="color: rgba(255,255,255,0.9); margin: 0; font-size: 14px; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">
-                        {texts['please_wait']}
-                    </p>
-                    
-                    <!-- Barre de progression simulée -->
-                    <div style="width: 100%; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; margin: 20px 0 10px 0; overflow: hidden;">
-                        <div style="height: 100%; background: linear-gradient(90deg, white, rgba(255,255,255,0.8), white); border-radius: 2px; animation: progress 3s ease-in-out infinite; width: 0%;"></div>
-                    </div>
-                    
-                    <p style="color: rgba(255,255,255,0.7); margin: 0; font-size: 12px; font-style: italic;">
-                        {texts.get('processing_response', 'Processing your response...')}
-                    </p>
-                </div>
+            <!-- Message de chargement simple -->
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; border-radius: 16px; padding: 25px; margin: 20px 0; text-align: center; color: white;">
+                <div style="font-size: 24px; margin-bottom: 10px;">🤖</div>
+                <h3 style="color: white; margin: 0 0 8px 0; font-size: 18px; font-weight: 600;">
+                    {texts['analyzing']}
+                </h3>
+                <p style="color: rgba(255,255,255,0.9); margin: 0; font-size: 14px;">
+                    {texts['please_wait']}
+                </p>
+                <p style="color: rgba(255,255,255,0.7); margin-top: 10px; font-size: 12px; font-style: italic;">
+                    Refresh the page in a few seconds...
+                </p>
             </div>
-            
-            <style>
-                @keyframes spin {{
-                    0% {{ transform: rotate(0deg); }}
-                    100% {{ transform: rotate(360deg); }}
-                }}
-                
-                @keyframes bounce {{
-                    0%, 20%, 50%, 80%, 100% {{ transform: translateY(0); }}
-                    40% {{ transform: translateY(-10px); }}
-                    60% {{ transform: translateY(-5px); }}
-                }}
-                
-                @keyframes shimmer {{
-                    0% {{ transform: translateX(-100%); }}
-                    100% {{ transform: translateX(100%); }}
-                }}
-                
-                @keyframes progress {{
-                    0% {{ width: 0%; transform: translateX(-100%); }}
-                    50% {{ width: 70%; transform: translateX(0%); }}
-                    100% {{ width: 100%; transform: translateX(100%); }}
-                }}
-            </style>
-            
-            <script>
-                (function() {{
-                    let refreshCount = 0;
-                    const maxRefresh = 15; // Maximum ~30 secondes
-                    const checkInterval = 2000; // NOUVEAU : On vérifie toutes les 2 secondes, pas toutes les secondes.
-                    
-                    // On utilise un ID unique pour notre minuteur pour éviter les conflits
-                    const timerId = `ai_checker_${{Math.random().toString(36).substr(2, 9)}}`;
-
-                    function checkAnalysisStatus() {{
-                        // Condition d'arrêt n°1 : Le spinner n'existe plus (car il a été remplacé par le résultat)
-                        const loader = document.getElementById('ai-loader-{abs(hash(cache_key))}');
-                        if (!loader) {{
-                            console.log('AI analysis result loaded. Stopping backup refresh.');
-                            clearTimeout(window[timerId]); // On nettoie le minuteur
-                            return;
-                        }}
-
-                        refreshCount++;
-                        console.log('Checking AI analysis status (backup)... attempt', refreshCount);
-                        
-                        // Condition d'arrêt n°2 : On a atteint le nombre maximum d'essais
-                        if (refreshCount > maxRefresh) {{
-                            console.log('AI analysis timeout reached');
-                            if (loader) {{
-                                loader.innerHTML = '<div style="color: white; text-align: center; padding: 20px;">Analysis timeout. Please try again.</div>';
-                            }}
-                            clearTimeout(window[timerId]); // On nettoie le minuteur
-                            return;
-                        }}
-                        
-                        // On déclenche le rafraîchissement via pycmd
-                        try {{
-                            if (typeof pycmd !== 'undefined') {{
-                                pycmd('ans');
-                            }}
-                        }} catch (e) {{
-                            console.log('Refresh method failed:', e);
-                        }}
-
-                        // On planifie la prochaine vérification
-                        // La boucle s'arrêtera d'elle-même si les conditions d'arrêt sont remplies
-                        window[timerId] = setTimeout(checkAnalysisStatus, checkInterval);
-                    }}
-                    
-                    // On démarre la vérification de secours après 2.5 secondes
-                    // pour laisser une chance au rafraîchissement Python de s'exécuter en premier.
-                    window[timerId] = setTimeout(checkAnalysisStatus, 2500);
-                }})();
-            </script>
         </div>
         """
         return spinner_output
     
-    # Récupérer l'analyse IA stockée
+    # **FIX 5: Récupérer l'analyse IA stockée avec debug**
     ai_analysis = analysis_results.get(cache_key) or ai_analysis_cache.get(cache_key)
+    print(f"Retrieved analysis for {cache_key}: {ai_analysis is not None}")
     
-    # Si l'analyse n'est pas encore disponible, utiliser des valeurs par défaut
+    # Si l'analyse n'est pas disponible, utiliser des valeurs par défaut
     if not ai_analysis:
+        print(f"No analysis available for {cache_key}, using defaults")
         ai_analysis = {
             "score": 5, 
             "tips": texts.get('ai_not_available', 'AI analysis not available'), 
@@ -244,7 +139,7 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
     }
     suggestion_color, suggestion_bg, suggestion_icon = suggestion_colors.get(suggestion, ("#4caf50", "#e8f5e8", "👍"))
     
-    # Créer l'affichage amélioré avec animation d'apparition
+    # **FIX 6: Affichage simplifié des résultats**
     enhanced_output = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto;">
         
@@ -254,95 +149,82 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
         </div>
         
         <!-- Analyse IA avec animation d'apparition -->
-        <div style="background: {score_bg}; border: 2px solid {score_color}; border-radius: 16px; padding: 25px; margin: 20px 0; box-shadow: 0 8px 32px rgba(0,0,0,0.1); animation: slideInUp 0.6s ease-out, pulse-border 2s infinite; position: relative; overflow: hidden;">
+        <div style="background: {score_bg}; border: 2px solid {score_color}; border-radius: 16px; padding: 25px; margin: 20px 0; box-shadow: 0 8px 32px rgba(0,0,0,0.1);">
             
-            <!-- Animation de succès -->
-            <div style="position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, {pulse_color}20 0%, transparent 70%); animation: success-ripple 1s ease-out; pointer-events: none;"></div>
+            <div style="display: flex; align-items: center; margin-bottom: 20px;">
+                <div style="display: flex; align-items: center; flex: 1;">
+                    <div style="background: {score_color}; width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+                        <span style="font-size: 20px;">🤖</span>
+                    </div>
+                    <h3 style="color: {score_color}; margin: 0; font-size: 22px; font-weight: 700;">
+                        {texts.get('ai_analysis', 'AI Analysis')}
+                    </h3>
+                </div>
+                <div style="background: linear-gradient(135deg, {score_color}, {score_color}dd); color: white; padding: 12px 20px; border-radius: 25px; font-weight: bold; font-size: 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+                    {score_icon} {score}/10
+                </div>
+            </div>
             
-            <!-- Contenu principal -->
-            <div style="position: relative; z-index: 2;">
-                <div style="display: flex; align-items: center; margin-bottom: 20px;">
-                    <div style="display: flex; align-items: center; flex: 1;">
-                        <div style="background: {score_color}; width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
-                            <span style="font-size: 20px;">🤖</span>
-                        </div>
-                        <h3 style="color: {score_color}; margin: 0; font-size: 22px; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                            {texts.get('ai_analysis', 'AI Analysis')}
-                        </h3>
-                    </div>
-                    <div style="background: linear-gradient(135deg, {score_color}, {score_color}dd); color: white; padding: 12px 20px; border-radius: 25px; font-weight: bold; font-size: 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); animation: score-pop 0.5s ease-out 0.3s both;">
-                        {score_icon} {score}/10
-                    </div>
-                </div>
-                
-                <div style="margin-bottom: 20px; padding: 15px; background: rgba(255,255,255,0.7); border-radius: 12px; border-left: 4px solid {score_color};">
-                    <h4 style="color: #2c3e50; margin: 0 0 10px 0; font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; display: flex; align-items: center;">
-                        💡 {texts.get('improvement_tips', 'Improvement Tips')}
-                    </h4>
-                    <p style="color: #34495e; margin: 0; line-height: 1.6; font-size: 15px;">
-                        {ai_analysis.get('tips', texts.get('no_tips_available', 'No tips available'))}
-                    </p>
-                </div>
-                
-                <div style="background: linear-gradient(135deg, {suggestion_bg}, {suggestion_bg}dd); border: 2px solid {suggestion_color}; border-radius: 12px; padding: 16px; animation: suggestion-glow 2s ease-in-out infinite alternate;">
-                    <div style="display: flex; align-items: center; justify-content: space-between;">
-                        <span style="color: #2c3e50; font-weight: 700; font-size: 16px; display: flex; align-items: center;">
-                            🎯 {texts.get('review_suggestion', 'Review Suggestion')}:
-                        </span>
-                        <span style="background: linear-gradient(135deg, {suggestion_color}, {suggestion_color}dd); color: white; padding: 10px 18px; border-radius: 20px; font-weight: bold; font-size: 15px; box-shadow: 0 3px 10px rgba(0,0,0,0.2); animation: suggestion-bounce 0.6s ease-out 0.5s both;">
-                            {suggestion_icon} {texts.get('suggestions', {}).get(suggestion, suggestion)}
-                        </span>
-                    </div>
+            <div style="margin-bottom: 20px; padding: 15px; background: rgba(255,255,255,0.7); border-radius: 12px; border-left: 4px solid {score_color};">
+                <h4 style="color: #2c3e50; margin: 0 0 10px 0; font-size: clamp(15px, 4vw, 17px); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; display: flex; align-items: center;">
+                    💡 {texts.get('improvement_tips', 'Improvement Tips')}
+                </h4>
+                <p style="color: #34495e; margin: 0; line-height: 1.6; font-size: clamp(14px, 4vw, 16px);">
+                    {ai_analysis.get('tips', texts.get('no_tips_available', 'No tips available'))}
+                </p>
+            </div>
+            
+            <div style="background: linear-gradient(135deg, {suggestion_bg}, {suggestion_bg}dd); border: 2px solid {suggestion_color}; border-radius: 12px; padding: 16px;">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <span style="color: #2c3e50; font-weight: 700; font-size: 16px; display: flex; align-items: center;">
+                        🎯 {texts.get('review_suggestion', 'Review Suggestion')}:
+                    </span>
+                    <span style="background: linear-gradient(135deg, {suggestion_color}, {suggestion_color}dd); color: white; padding: 10px 18px; border-radius: 20px; font-weight: bold; font-size: 15px; box-shadow: 0 3px 10px rgba(0,0,0,0.2);">
+                        {suggestion_icon} {texts.get('suggestions', {}).get(suggestion, suggestion)}
+                    </span>
                 </div>
             </div>
         </div>
-        
-        <style>
-            @keyframes slideInUp {{
-                0% {{ transform: translateY(30px); opacity: 0; }}
-                100% {{ transform: translateY(0); opacity: 1; }}
-            }}
-            
-            @keyframes pulse-border {{
-                0%, 100% {{ box-shadow: 0 8px 32px rgba(0,0,0,0.1); }}
-                50% {{ box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 0 0 3px {score_color}33; }}
-            }}
-            
-            @keyframes success-ripple {{
-                0% {{ transform: scale(0); opacity: 0.8; }}
-                100% {{ transform: scale(1); opacity: 0; }}
-            }}
-            
-            @keyframes score-pop {{
-                0% {{ transform: scale(0.8) rotateZ(-5deg); opacity: 0; }}
-                50% {{ transform: scale(1.1) rotateZ(2deg); }}
-                100% {{ transform: scale(1) rotateZ(0deg); opacity: 1; }}
-            }}
-            
-            @keyframes suggestion-glow {{
-                0% {{ box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
-                100% {{ box-shadow: 0 4px 20px {suggestion_color}33; }}
-            }}
-            
-            @keyframes suggestion-bounce {{
-                0% {{ transform: scale(0.9) translateY(5px); opacity: 0; }}
-                50% {{ transform: scale(1.05) translateY(-2px); }}
-                100% {{ transform: scale(1) translateY(0); opacity: 1; }}
-            }}
-        </style>
     </div>
     """
     
-    # Nettoyer les caches pour éviter l'accumulation
-    if len(ai_analysis_cache) > 10:
-        # Garder seulement les 5 plus récents
-        keys_to_remove = list(ai_analysis_cache.keys())[:-5]
-        for key in keys_to_remove:
-            ai_analysis_cache.pop(key, None)
-            is_analyzing.pop(key, None)
-            analysis_results.pop(key, None)
+    # **FIX 7: Nettoyer les caches plus prudemment**
+    cleanup_old_cache_entries()
     
     return enhanced_output
+
+def cleanup_old_cache_entries():
+    """Nettoie les anciennes entrées de cache"""
+    try:
+        if len(ai_analysis_cache) > 10:
+            # Garder seulement les 5 plus récents
+            keys_to_remove = list(ai_analysis_cache.keys())[:-5]
+            for key in keys_to_remove:
+                ai_analysis_cache.pop(key, None)
+                is_analyzing.pop(key, None)
+                analysis_results.pop(key, None)
+            print(f"Cleaned up {len(keys_to_remove)} old cache entries")
+    except Exception as e:
+        print(f"Error during cache cleanup: {e}")
+
+# **FIX 8: Fonction pour débugger l'état des caches**
+def debug_cache_state():
+    """Debug la situation actuelle des caches"""
+    print("=== CACHE STATE DEBUG ===")
+    print(f"ai_analysis_cache: {len(ai_analysis_cache)} entries")
+    print(f"is_analyzing: {len(is_analyzing)} entries")
+    print(f"analysis_results: {len(analysis_results)} entries")
+    print(f"Currently analyzing: {[k for k, v in is_analyzing.items() if v]}")
+    print("========================")
+
+# **FIX 9: Réinitialiser les caches au démarrage**
+def reset_ai_caches():
+    """Réinitialise tous les caches"""
+    global ai_analysis_cache, is_analyzing, analysis_results
+    ai_analysis_cache.clear()
+    is_analyzing.clear()
+    analysis_results.clear()
+    print("AI caches reset")
 
 # import the necessary hooks
 from aqt import gui_hooks, mw
@@ -650,6 +532,7 @@ def call_ai_api(messages, provider="openai", model="gpt-3.5-turbo", max_tokens=2
     
     except Exception as e:
         raise Exception(f"Erreur inattendue: {str(e)}")
+
 
 def get_language_specific_prompt(language, true_answer, user_answer):
     """Génère un prompt selon la langue configurée"""

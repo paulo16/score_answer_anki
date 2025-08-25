@@ -25,6 +25,8 @@ This Anki add-on enhances your flashcard review experience by providing intellig
 
 ## Configuration Options
 
+⚠️ :  <b>After setup config it's mandatory to restart anki<b>
+
 ### General Settings
 
 #### AI Provider
@@ -64,7 +66,9 @@ This Anki add-on enhances your flashcard review experience by providing intellig
 
 ### Provider-Specific Settings
 
-Each AI provider has its own tab with specific configuration:
+Each AI provider has its own tab with specific configuration:\n
+
+⚠️ :  <b>After config restart anki<b>
 
 #### OpenAI
 - **Models Available**: gpt-3.5-turbo, gpt-4, gpt-4-turbo, gpt-4o, gpt-4o-mini
@@ -125,6 +129,7 @@ Each AI provider has its own tab with specific configuration:
 4. Click "Save"
 
 ### 4. Start Using
+![loadspinner](/images/analysis_by_AI.png)
 ![review](/images/very_good.png)
 - Review your flashcards as normal
 - After answering, you'll see both Anki's standard comparison and the AI analysis

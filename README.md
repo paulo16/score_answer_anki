@@ -129,6 +129,7 @@ Each AI provider has its own tab with specific configuration:\n
 4. Click "Save"
 
 ### 4. Start Using
+![loadspinner](/images/analysis_by_AI.png)
 ![review](/images/very_good.png)
 - Review your flashcards as normal
 - After answering, you'll see both Anki's standard comparison and the AI analysis
