@@ -586,7 +586,6 @@ def call_ai_api(messages, provider="openai", model="gpt-3.5-turbo", max_tokens=2
         else:
             # OpenAI, DeepSeek, Groq
             if 'choices' in response_data and len(response_data['choices']) > 0:
-                print(f'---Content-----{response_data['choices'][0]['message']['content']}')
                 return response_data['choices'][0]['message']['content']
         
         raise Exception("Réponse API invalide")
