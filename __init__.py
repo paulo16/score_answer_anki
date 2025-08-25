@@ -550,7 +550,7 @@ def format_messages_for_provider(messages, provider):
         
         formatted_data = {
             "model": "",  # Sera ajouté plus tard
-            "max_tokens": 200,  # Sera ajouté plus tard
+            "max_tokens": 350,  # Sera ajouté plus tard
             "messages": user_messages
         }
         
@@ -563,7 +563,7 @@ def format_messages_for_provider(messages, provider):
         # Format OpenAI (compatible avec OpenAI, DeepSeek, Groq)
         return {
             "messages": messages,
-            "max_tokens": 200,  # Sera ajouté plus tard
+            "max_tokens": 350,  # Sera ajouté plus tard
             "temperature": 0.7  # Sera ajouté plus tard
         }
 
