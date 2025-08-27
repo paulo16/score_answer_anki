@@ -1,10 +1,221 @@
-# Variables globales pour stocker l'analyse IA et l'état de chargement
+import html
 import re
 
 
 ai_analysis_cache = {}
 is_analyzing = {}
 analysis_results = {}
+
+from aqt import gui_hooks
+
+
+def extract_code_text(html_or_text: str) -> str:
+    """
+    Extract readable code from HTML or plaintext while preserving newlines/indentation.
+    - Prefers the content inside <pre> blocks if present (common in highlighter output).
+    - Strips tags/spans/line-numbering, unescapes entities.
+    - Falls back to a generic HTML strip that keeps line breaks.
+    """
+    if not html_or_text:
+        return ""
+    s = html_or_text.replace('\r\n', '\n').replace('\r', '\n')
+
+    # Prefer <pre> blocks (e.g., hilite.me wraps code in <pre> inside a table) [hilite.me](http://hilite.me/)
+    pre_blocks = re.findall(r'<pre[^>]*>(.*?)</pre>', s, flags=re.IGNORECASE | re.DOTALL)
+    if pre_blocks:
+        parts = []
+        for block in pre_blocks:
+            block = re.sub(r'<br\s*/?>', '\n', block, flags=re.IGNORECASE)
+            block = re.sub(r'<[^>]+>', '', block)  # strip spans/etc. inside pre
+            block = html.unescape(block)
+            block = '\n'.join(ln.rstrip() for ln in block.split('\n'))
+            parts.append(block.strip('\n'))
+        text = '\n\n'.join(parts)
+
+        # Optional: drop leading line numbers if most lines start with digits
+        lines = text.split('\n')
+        if lines and sum(1 for ln in lines if re.match(r'^\s*\d+\b', ln)) >= max(3, len(lines)//2):
+            lines = [re.sub(r'^\s*\d+\b\s*', '', ln) for ln in lines]
+            text = '\n'.join(lines)
+    else:
+        # Generic HTML → text with preserved line breaks
+        s = re.sub(r'<script.*?</script>', '', s, flags=re.IGNORECASE | re.DOTALL)
+        s = re.sub(r'<style.*?</style>', '', s, flags=re.IGNORECASE | re.DOTALL)
+        # Block-level to newline
+        s = re.sub(r'</?(p|div|br|li|tr|td|th|blockquote|h[1-6]|ul|ol|pre|table)[^>]*>', '\n', s, flags=re.IGNORECASE)
+        s = re.sub(r'<[^>]+>', '', s)  # remove remaining tags
+        text = html.unescape(s)
+
+    # Normalize blank lines
+    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+    return text
+
+def _to_textarea_on_question(text: str, card, kind: str) -> str:
+    # Only on the question side
+    if not kind or "Question" not in kind:
+        return text
+
+    # Match <input ... id=typeans ...> with or without quotes, any attribute order
+    pat = re.compile(r'(?is)<input(?P<attrs>[^>]*\bid\s*=\s*(?:"|\')?typeans(?:"|\')?[^>]*)>')
+
+    def repl(m):
+        attrs = m.group('attrs')
+        # Remove type=... and value=... which don't apply to textarea
+        attrs = re.sub(r'\stype\s*=\s*(?:"|\')?[^"\'>\s]+(?:"|\')?', '', attrs, flags=re.I)
+        attrs = re.sub(r'\svalue\s*=\s*(?:"|\').*?(?:"|\')', '', attrs, flags=re.I | re.S)
+        return (
+            f'<textarea{attrs} rows="10" spellcheck="false" '
+            'style="width:96%;min-height:180px;'
+            "font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;"
+            'font-size:16px; line-height:1.4; tab-size:2;"></textarea>'
+        )
+
+    new_text, replaced = pat.subn(repl, text)
+
+    # Fallback if nothing got replaced (handles odd HTML variants/timing)
+    if replaced == 0:
+        new_text += """
+<script>
+(function(){
+  function swap(){
+    var e = document.getElementById('typeans');
+    if (!e || e.tagName.toLowerCase()==='textarea') return;
+    var ta = document.createElement('textarea');
+    for (var i=0;i<e.attributes.length;i++){
+      var a=e.attributes[i]; try{ ta.setAttribute(a.name, a.value); }catch(_){}
+    }
+    ta.value = e.value || '';
+    ta.rows = 10; ta.spellcheck = false;
+    ta.style.width='96%'; ta.style.minHeight='180px';
+    ta.style.fontFamily='ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \\'Liberation Mono\\', monospace';
+    ta.style.fontSize='16px'; ta.style.lineHeight='1.4'; ta.style.tabSize='2';
+    e.parentNode.replaceChild(ta, e);
+    ta.addEventListener('keydown', function(ev){
+      if ((ev.ctrlKey||ev.metaKey) && ev.key==='Enter'){
+        if (typeof pycmd==='function') pycmd('ans');
+        ev.preventDefault();
+      }
+    });
+  }
+  // Run now and also on future DOM updates
+  swap();
+  var mo=new MutationObserver(swap);
+  mo.observe(document.documentElement||document.body, {childList:true, subtree:true});
+})();
+</script>
+"""
+    return new_text
+
+def _code_friendly_diff_on_answer(text: str, card, kind: str) -> str:
+    # Make Anki’s diff preserve newlines/indent on back
+    if "Answer" not in (kind or ""):
+        return text
+    css = """
+<style>
+.typeGood, .typeBad, .typeMissed {
+  white-space: pre-wrap !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
+}
+</style>
+"""
+    return css + text
+
+
+def inject_multiline_type_input(web_content, context):
+    """
+    Injecte CSS/JS dans le reviewer pour:
+    - convertir l'input {{type:...}} en textarea multi-ligne
+    - améliorer l'affichage des diffs Anki (.typeGood/Bad/Missed) pour le code
+    """
+    try:
+        # Limiter au reviewer
+        if context.__class__.__name__ != "Reviewer":
+            return
+    except Exception:
+        return
+
+    web_content.head += """
+<style>
+/* Textarea multi-ligne pour la saisie type answer */
+textarea#typeans, #typeans {
+  width: 96% !important;
+  min-height: 180px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
+  font-size: 16px !important;
+  line-height: 1.4;
+  tab-size: 2;
+}
+
+/* Rendre la comparaison Anki plus “code-friendly” (respect des sauts/indentations) */
+.typeGood, .typeBad, .typeMissed {
+  white-space: pre-wrap !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
+}
+</style>
+<script>
+(function(){
+  function upgradeTypeAnswer(){
+    var inp = document.getElementById('typeans');
+    if (!inp || inp.tagName.toLowerCase() === 'textarea') return;
+
+    // Cloner les attributs de l’input vers un textarea
+    var ta = document.createElement('textarea');
+    for (var i=0; i<inp.attributes.length; i++){
+      var a = inp.attributes[i];
+      try { ta.setAttribute(a.name, a.value); } catch(e){}
+    }
+    ta.value = inp.value || '';
+    ta.rows = 10;
+    ta.spellcheck = false;
+
+    inp.parentNode.replaceChild(ta, inp);
+
+    try {
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    } catch(e){}
+
+    // Ctrl/Cmd+Entrée => montrer la réponse
+    ta.addEventListener('keydown', function(e){
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        if (typeof pycmd === 'function') pycmd('ans');
+        e.preventDefault();
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', upgradeTypeAnswer);
+  } else {
+    upgradeTypeAnswer();
+  }
+})();
+</script>
+"""
+
+# Activer l’injection au chargement
+from aqt import gui_hooks
+gui_hooks.webview_will_set_content.append(inject_multiline_type_input)
+
+def _code_compare_block(expected: str, provided: str, lang_hint: str = "") -> str:
+    exp_text = extract_code_text(expected)
+    prov_text = extract_code_text(provided)  # safe even if already plain text
+    return f"""
+    <div style="display:flex; gap:12px; margin:12px 0;">
+      <div style="flex:1; min-width:0;">
+        <div style="font-weight:700; margin-bottom:6px;">Attendu</div>
+        <pre style="white-space:pre-wrap; padding:10px; border:1px solid #ddd; border-radius:8px; background:#fafafa; overflow:auto;">
+<code class="language-{lang_hint}">{html.escape(exp_text)}</code>
+        </pre>
+      </div>
+      <div style="flex:1; min-width:0;">
+        <div style="font-weight:700; margin-bottom:6px;">Saisi</div>
+        <pre style="white-space:pre-wrap; padding:10px; border:1px solid #ddd; border-radius:8px; background:#fafafa; overflow:auto;">
+<code class="language-{lang_hint}">{html.escape(prov_text)}</code>
+        </pre>
+      </div>
+    </div>
+    """
 
 def store_ai_analysis(expected_provided_tuple, type_pattern):
     """
@@ -245,6 +456,8 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
         </div>
         """
     
+    # Affichage alternatif fidèle pour le code (en plus du diff Anki)
+    code_block = _code_compare_block(initial_expected, initial_provided, lang_hint="")
     # Affichage simplifié des résultats
     enhanced_output = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto;">
@@ -253,6 +466,8 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
         <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #6c757d;">
             {output}
         </div>
+        
+        {code_block}
         
         <!-- Analyse IA avec animation d'apparition -->
         <div style="background: {score_bg}; border: 2px solid {score_color}; border-radius: 16px; padding: 25px; margin: 20px 0; box-shadow: 0 8px 32px rgba(0,0,0,0.1);">
@@ -1094,10 +1309,21 @@ def init():
     ai_analysis_cache.clear()
     is_analyzing.clear()
     analysis_results.clear()
+    
+def _debug_dump_front(text, card, kind):
+    if kind and "Question" in kind:
+        print("=== FRONT HTML START ===")
+        print(text[:4000])  # enough to see the input markup
+        print("=== FRONT HTML END ===")
+    return text
 
 # Add the functions to the hooks
+gui_hooks.card_will_show.append(_to_textarea_on_question)
+gui_hooks.card_will_show.append(_code_friendly_diff_on_answer)
 gui_hooks.reviewer_will_compare_answer.append(store_ai_analysis)
 gui_hooks.reviewer_will_render_compared_answer.append(render_enhanced_comparison)
+# enable briefly
+gui_hooks.card_will_show.append(_debug_dump_front)
 
 # Initialiser lors du chargement
 init()
