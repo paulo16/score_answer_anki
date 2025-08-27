@@ -222,19 +222,46 @@ def inject_multiline_type_input(web_content, context):
 
     web_content.head += """
 <style>
-/* Textarea multi-ligne pour la saisie type answer */
-textarea#typeans, #typeans {
-  width: 96% !important;
-  min-height: 180px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
-  font-size: 16px !important;
-  line-height: 1.4;
-  tab-size: 2;
+/* Couleurs thème-aware pour les blocs de comparaison */
+:root {
+  --ak-code-bg: #fafafa;
+  --ak-code-fg: #1b1b1b;
+  --ak-code-border: #ddd;
+  --ak-code-label: #222;
 }
 
-/* Rendre la comparaison Anki plus “code-friendly” (respect des sauts/indentations) */
-.typeGood, .typeBad, .typeMissed {
+/* Détection du sombre dans Anki + fallback */
+body.nightMode, body.night-mode, .nightMode, .night-mode, .isDark, [data-theme="dark"] {
+  --ak-code-bg: #0f1116;
+  --ak-code-fg: #e6edf3;
+  --ak-code-border: #2d333b;
+  --ak-code-label: #e6edf3;
+}
+
+/* Fallback pour systèmes qui annoncent le thème via le média */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ak-code-bg: #0f1116;
+    --ak-code-fg: #e6edf3;
+    --ak-code-border: #2d333b;
+    --ak-code-label: #e6edf3;
+  }
+}
+
+/* Styles des blocs de comparaison */
+.ak-compare .ak-label {
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: var(--ak-code-label) !important;
+}
+.ak-compare .ak-pre {
   white-space: pre-wrap !important;
+  padding: 10px;
+  border: 1px solid var(--ak-code-border) !important;
+  border-radius: 8px;
+  background: var(--ak-code-bg) !important;
+  color: var(--ak-code-fg) !important;
+  overflow: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
 }
 </style>
@@ -289,18 +316,14 @@ def _code_compare_block(expected: str, provided: str, lang_hint: str, labels: di
     le = labels.get("expected", "Expected")
     lp = labels.get("provided", "Your answer")
     return f"""
-    <div style="display:flex; gap:12px; margin:12px 0;">
+    <div class="ak-compare" style="display:flex; gap:12px; margin:12px 0;">
       <div style="flex:1; min-width:0;">
-        <div style="font-weight:700; margin-bottom:6px;">{html.escape(le)}</div>
-        <pre style="white-space:pre-wrap; padding:10px; border:1px solid #ddd; border-radius:8px; background:#fafafa; overflow:auto;">
-<code class="language-{lang_hint}">{html.escape(exp_text)}</code>
-        </pre>
+        <div class="ak-label">{html.escape(le)}</div>
+        <pre class="ak-pre"><code class="language-{lang_hint}">{html.escape(exp_text)}</code></pre>
       </div>
       <div style="flex:1; min-width:0;">
-        <div style="font-weight:700; margin-bottom:6px;">{html.escape(lp)}</div>
-        <pre style="white-space:pre-wrap; padding:10px; border:1px solid #ddd; border-radius:8px; background:#fafafa; overflow:auto;">
-<code class="language-{lang_hint}">{html.escape(prov_text)}</code>
-        </pre>
+        <div class="ak-label">{html.escape(lp)}</div>
+        <pre class="ak-pre"><code class="language-{lang_hint}">{html.escape(prov_text)}</code></pre>
       </div>
     </div>
     """
