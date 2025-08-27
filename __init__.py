@@ -8,51 +8,65 @@ analysis_results = {}
 
 def store_ai_analysis(expected_provided_tuple, type_pattern):
     """
-    Analyse la réponse avec l'IA et stocke le résultat
+    Lance l'analyse IA en arrière-plan pour ne pas bloquer l'UI,
+    afin que le verso s'affiche tout de suite avec un spinner.
     """
     true_answer = expected_provided_tuple[0] or ""
     user_answer = expected_provided_tuple[1] or ""
-    
-    # **NOUVEAU: Récupérer le contenu de la carte actuelle**
+
     question_text = get_current_question()
-    
-    # Créer une clé unique pour cette comparaison (inclut maintenant la question)
     cache_key = f"{hash(question_text)}_{hash(true_answer)}_{hash(user_answer)}"
-    
-    # Vérifier si l'analyse existe déjà
+
+    # Déjà en cache
     if cache_key in ai_analysis_cache:
         print(f"Using cached analysis for {cache_key}")
         return expected_provided_tuple
-    
-    # Éviter les appels multiples avec un verrou simple
+
+    # Analyse déjà en cours
     if is_analyzing.get(cache_key, False):
         print(f"Analysis already in progress for {cache_key}")
         return expected_provided_tuple
-    
-    # Marquer comme en cours d'analyse
+
+    # Marquer en cours
     is_analyzing[cache_key] = True
     analysis_results[cache_key] = None
-    print(f"Starting AI analysis for key: {cache_key}")
-    
-    # Analyse synchrone au lieu d'asynchrone pour éviter les problèmes de threading
-    try:
-        print(f"Calling AI API for analysis...")
-        # **MODIFIÉ: Passer la question à l'analyse IA**
-        ai_analysis = analyze_answer_with_ai(question_text, true_answer, user_answer)
-        analysis_results[cache_key] = ai_analysis
-        ai_analysis_cache[cache_key] = ai_analysis
-        print(f"AI analysis completed successfully for {cache_key}")
-        
-    except Exception as e:
-        # En cas d'erreur, stocker un résultat par défaut
-        default_result = {"score": 5, "tips": f"Analysis error: {str(e)}", "review_suggestion": "Good"}
-        analysis_results[cache_key] = default_result
-        ai_analysis_cache[cache_key] = default_result
-        print(f"AI Analysis Error for {cache_key}: {str(e)}")
-    finally:
-        is_analyzing[cache_key] = False
-    
-    # Retourner les réponses inchangées pour la comparaison normale
+    print(f"Starting background AI analysis for key: {cache_key}")
+
+    # Tâche de fond
+    def task():
+        try:
+            print("Calling AI API for analysis (background)...")
+            return analyze_answer_with_ai(question_text, true_answer, user_answer)
+        except Exception as e:
+            print(f"AI Analysis Error (bg): {e}")
+            return {"score": 5, "tips": f"Analysis error: {str(e)}", "review_suggestion": "Good"}
+
+    # Callback: reçoit un Future
+    def on_done(fut):
+        try:
+            result = fut.result()
+        except Exception as e:
+            print(f"Background task failed: {e}")
+            result = {"score": 5, "tips": f"Analysis error: {str(e)}", "review_suggestion": "Good"}
+        finally:
+            # Toujours dé-marquer l'état d'analyse
+            is_analyzing[cache_key] = False
+
+        # Stocker le résultat (un dict, pas un Future)
+        ai_analysis_cache[cache_key] = result
+        analysis_results[cache_key] = result
+        print(f"AI analysis completed (bg) for {cache_key}")
+
+        # Rafraîchir l'affichage
+        try:
+            refresh_ai_analysis()
+        except Exception as e:
+            print(f"Refresh error after AI analysis: {e}")
+
+    # Lancer en arrière-plan
+    mw.taskman.run_in_background(task, on_done)
+
+    # Laisser l'UI afficher le verso avec spinner
     return expected_provided_tuple
 
 def clean_html_content(html_content):
@@ -129,27 +143,42 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
     if is_analyzing.get(cache_key, False) and cache_key not in ai_analysis_cache:
         print(f"Analysis in progress for {cache_key}, showing simple loading message")
         # Message de chargement simple sans JavaScript compliqué
+        # Dans render_enhanced_comparison, remplacer le spinner_output par :
         spinner_output = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto;">
-            
+
             <!-- Comparaison par défaut d'Anki -->
             <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #6c757d;">
                 {output}
             </div>
-            
-            <!-- Message de chargement simple -->
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; border-radius: 16px; padding: 25px; margin: 20px 0; text-align: center; color: white;">
-                <div style="font-size: 24px; margin-bottom: 10px;">🤖</div>
-                <h3 style="color: white; margin: 0 0 8px 0; font-size: 18px; font-weight: 600;">
-                    {texts['analyzing']}
-                </h3>
+
+            <!-- Bloc chargement -->
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none; border-radius: 16px; padding: 25px; margin: 20px 0; text-align: center; color: white; position: relative; overflow: hidden;">
+                <div style="display: inline-flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                    <div style="width: 26px; height: 26px; border: 3px solid rgba(255,255,255,0.35); border-top-color: #fff; border-radius: 50%; animation: aki_spin 0.9s linear infinite;"></div>
+                    <div style="font-size: 18px; font-weight: 600;">{texts['analyzing']}</div>
+                </div>
                 <p style="color: rgba(255,255,255,0.9); margin: 0; font-size: 14px;">
                     {texts['please_wait']}
                 </p>
                 <p style="color: rgba(255,255,255,0.7); margin-top: 10px; font-size: 12px; font-style: italic;">
-                    Refresh the page in a few seconds...
+                    Actualisation automatique...
                 </p>
             </div>
+
+            <!-- Style + auto-refresh doux -->
+            <style>
+            @keyframes aki_spin {{ to {{ transform: rotate(360deg); }} }}
+            </style>
+            <script>
+            // Relance un rafraîchissement du verso pendant l'analyse.
+            // Sans boucle infinie: on appelle 1 fois à T+1.2s; si encore en cours, le même bloc se ré-affichera et relancera ce timeout.
+            setTimeout(function() {{
+                if (typeof pycmd === 'function') {{
+                pycmd('refresh_ai_analysis');
+                }}
+            }}, 1200);
+            </script>
         </div>
         """
         return spinner_output
@@ -462,7 +491,7 @@ PROVIDERS = {
     "openrouter": {
         "name": "OpenRouter",
         "url": "https://openrouter.ai/api/v1/chat/completions",
-        "models": ["deepseek/deepseek-r1:free", "openai/gpt-oss-20b:free", "qwen/qwen3-coder:free" ,"google/gemma-3n-e2b-it:free" ,"tencent/hunyuan-a13b-instruct:free"],
+        "models": ["deepseek/deepseek-r1:free","google/gemini-2.5-flash","openai/gpt-4o-mini-2024-07-18", "meta-llama/llama-3.2-1b-instruct", "arliai/qwq-32b-arliai-rpr-v1","openai/gpt-oss-20b:free", "qwen/qwen3-coder:free" ,"google/gemma-3n-e2b-it:free" ,"tencent/hunyuan-a13b-instruct:free"],
         "headers_func": lambda api_key: {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
@@ -799,7 +828,7 @@ def analyze_answer_with_ai(question_text: str, true_answer: str, user_answer: st
                 except:
                     pass
         
-        return {"score": score, "tips": ai_response[:150] + "...", "review_suggestion": review_suggestion}
+        return {"score": score, "tips": ai_response[:300] + "...", "review_suggestion": review_suggestion}
         
     except Exception as e:
         print(f"AI Analysis Error: {str(e)}")  # Pour debugging
