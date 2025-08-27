@@ -1,12 +1,80 @@
 import html
 import re
+from aqt import gui_hooks
 
 
 ai_analysis_cache = {}
 is_analyzing = {}
 analysis_results = {}
 
-from aqt import gui_hooks
+# translations and label helpers
+# Map your config["language"] key -> labels
+LANG_TO_LABELS = {
+    "english":   {"expected": "Expected",  "provided": "Your answer"},
+    "french":    {"expected": "Attendu",   "provided": "Saisi"},
+    "spanish":   {"expected": "Esperado",  "provided": "Ingresado"},
+    "german":    {"expected": "Erwartet",  "provided": "Eingegeben"},
+    "portuguese":{"expected": "Esperado",  "provided": "Digitado"},
+    "italian":   {"expected": "Atteso",    "provided": "Inserito"},
+}
+
+def get_compare_labels(config: dict) -> dict:
+    key = (config or {}).get("language", "english")
+    key = str(key).lower()
+    base = LANG_TO_LABELS.get(key, LANG_TO_LABELS["english"])
+    # Optional per-user overrides if you want to support them:
+    # ex: config["labels"] = {"expected": "Attendu", "provided": "Votre réponse"}
+    overrides = (config or {}).get("labels", {}) or {}
+    return {
+        "expected": overrides.get("expected", base["expected"]),
+        "provided": overrides.get("provided", base["provided"]),
+    }
+
+def _detect_ui_lang_code() -> str:
+    # Try to detect Anki UI language, fall back to 'en'
+    try:
+        from aqt import mw
+        pm = getattr(mw, "pm", None)
+        if pm:
+            # common possibilities across Anki versions
+            for attr in ("uiLanguage", "language", "lang"):
+                if hasattr(pm, attr):
+                    val = getattr(pm, attr)
+                    if callable(val):
+                        val = val()
+                    if isinstance(val, str) and val:
+                        return val.lower()[:2]
+            meta = getattr(pm, "meta", None)
+            if isinstance(meta, dict):
+                for k in ("locale", "lang", "language"):
+                    v = meta.get(k)
+                    if isinstance(v, str) and v:
+                        return v.lower()[:2]
+        # try aqt.lang if present
+        try:
+            import aqt.lang as _alang
+            lang = getattr(_alang, "current_lang", None)
+            if isinstance(lang, str) and lang:
+                return lang.lower()[:2]
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return "en"
+
+def _labels_from_config(config: dict) -> dict:
+    # read configured language
+    sel = (config or {}).get("ui_language", "auto")
+    if sel == "auto":
+        lang = _detect_ui_lang_code()
+    else:
+        lang = str(sel).lower()[:2]
+    base = LANG_LABELS.get(lang, LANG_LABELS["en"])
+    # allow future per-user overrides (optional keys)
+    overrides = (config or {}).get("labels", {})
+    lbl_expected = overrides.get("expected", base["expected"])
+    lbl_provided = overrides.get("provided", base["provided"])
+    return {"expected": lbl_expected, "provided": lbl_provided}
 
 
 def extract_code_text(html_or_text: str) -> str:
@@ -50,75 +118,93 @@ def extract_code_text(html_or_text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
     return text
 
+# imports near the top
+import re, html
+from aqt import gui_hooks
+
 def _to_textarea_on_question(text: str, card, kind: str) -> str:
-    # Only on the question side
     if not kind or "Question" not in kind:
         return text
 
-    # Match <input ... id=typeans ...> with or without quotes, any attribute order
+    # robust: quoted/unquoted id=typeans
     pat = re.compile(r'(?is)<input(?P<attrs>[^>]*\bid\s*=\s*(?:"|\')?typeans(?:"|\')?[^>]*)>')
 
     def repl(m):
         attrs = m.group('attrs')
-        # Remove type=... and value=... which don't apply to textarea
+        # strip type= and value= on textarea
         attrs = re.sub(r'\stype\s*=\s*(?:"|\')?[^"\'>\s]+(?:"|\')?', '', attrs, flags=re.I)
-        attrs = re.sub(r'\svalue\s*=\s*(?:"|\').*?(?:"|\')', '', attrs, flags=re.I | re.S)
+        attrs = re.sub(r'\svalue\s*=\s*(?:"|\').*?(?:"|\')', '', attrs, flags=re.I|re.S)
         return (
             f'<textarea{attrs} rows="10" spellcheck="false" '
             'style="width:96%;min-height:180px;'
             "font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;"
             'font-size:16px; line-height:1.4; tab-size:2;"></textarea>'
+            '<script>(function(){'
+            'function wireTA(ta){ if(!ta||ta.dataset.mlReady) return; ta.dataset.mlReady="1";'
+            'function onEnter(e){ if(e.key==="Enter"){'
+            ' if(e.ctrlKey||e.metaKey){ e.stopImmediatePropagation(); e.stopPropagation(); e.preventDefault();'
+            '  if(typeof pycmd==="function") pycmd("ans");'
+            ' } else { e.stopImmediatePropagation(); e.stopPropagation(); /* let default newline happen */ }'
+            '} }'
+            "['keydown','keypress','keyup'].forEach(function(t){ ta.addEventListener(t,onEnter,true); });"
+            '}'
+            'var ta=document.getElementById("typeans"); if(ta) wireTA(ta);'
+            '})();</script>'
         )
 
     new_text, replaced = pat.subn(repl, text)
 
-    # Fallback if nothing got replaced (handles odd HTML variants/timing)
+    # Fallback if no match (timing/DOM variants)
     if replaced == 0:
         new_text += """
 <script>
 (function(){
-  function swap(){
-    var e = document.getElementById('typeans');
-    if (!e || e.tagName.toLowerCase()==='textarea') return;
-    var ta = document.createElement('textarea');
-    for (var i=0;i<e.attributes.length;i++){
-      var a=e.attributes[i]; try{ ta.setAttribute(a.name, a.value); }catch(_){}
-    }
-    ta.value = e.value || '';
-    ta.rows = 10; ta.spellcheck = false;
-    ta.style.width='96%'; ta.style.minHeight='180px';
-    ta.style.fontFamily='ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \\'Liberation Mono\\', monospace';
-    ta.style.fontSize='16px'; ta.style.lineHeight='1.4'; ta.style.tabSize='2';
-    e.parentNode.replaceChild(ta, e);
-    ta.addEventListener('keydown', function(ev){
-      if ((ev.ctrlKey||ev.metaKey) && ev.key==='Enter'){
-        if (typeof pycmd==='function') pycmd('ans');
-        ev.preventDefault();
+  function wireTA(ta){
+    if(!ta||ta.dataset.mlReady) return; ta.dataset.mlReady="1";
+    function onEnter(e){
+      if(e.key==='Enter'){
+        if(e.ctrlKey||e.metaKey){
+          e.stopImmediatePropagation(); e.stopPropagation(); e.preventDefault();
+          if (typeof pycmd==='function') pycmd('ans');
+        } else {
+          e.stopImmediatePropagation(); e.stopPropagation(); // allow newline
+        }
       }
-    });
+    }
+    ['keydown','keypress','keyup'].forEach(function(t){ ta.addEventListener(t,onEnter,true); });
   }
-  // Run now and also on future DOM updates
+  function swap(){
+    var e=document.getElementById('typeans'); if(!e) return;
+    if(e.tagName.toLowerCase()!=='textarea'){
+      var ta=document.createElement('textarea');
+      for(var i=0;i<e.attributes.length;i++){ var a=e.attributes[i]; try{ ta.setAttribute(a.name,a.value);}catch(_){} }
+      ta.value=e.value||''; ta.rows=10; ta.spellcheck=false;
+      ta.style.width='96%'; ta.style.minHeight='180px';
+      ta.style.fontFamily='ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
+      ta.style.fontSize='16px'; ta.style.lineHeight='1.4'; ta.style.tabSize='2';
+      e.parentNode.replaceChild(ta,e); e=ta;
+    }
+    wireTA(e);
+  }
   swap();
-  var mo=new MutationObserver(swap);
-  mo.observe(document.documentElement||document.body, {childList:true, subtree:true});
+  var mo=new MutationObserver(function(){ swap(); });
+  mo.observe(document.documentElement||document.body,{childList:true,subtree:true});
 })();
 </script>
 """
     return new_text
 
 def _code_friendly_diff_on_answer(text: str, card, kind: str) -> str:
-    # Make Anki’s diff preserve newlines/indent on back
-    if "Answer" not in (kind or ""):
+    if not kind or "Answer" not in kind:
         return text
-    css = """
+    return """
 <style>
 .typeGood, .typeBad, .typeMissed {
   white-space: pre-wrap !important;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
 }
 </style>
-"""
-    return css + text
+""" + text
 
 
 def inject_multiline_type_input(web_content, context):
@@ -197,19 +283,21 @@ textarea#typeans, #typeans {
 from aqt import gui_hooks
 gui_hooks.webview_will_set_content.append(inject_multiline_type_input)
 
-def _code_compare_block(expected: str, provided: str, lang_hint: str = "") -> str:
+def _code_compare_block(expected: str, provided: str, lang_hint: str, labels: dict) -> str:
     exp_text = extract_code_text(expected)
-    prov_text = extract_code_text(provided)  # safe even if already plain text
+    prov_text = extract_code_text(provided)
+    le = labels.get("expected", "Expected")
+    lp = labels.get("provided", "Your answer")
     return f"""
     <div style="display:flex; gap:12px; margin:12px 0;">
       <div style="flex:1; min-width:0;">
-        <div style="font-weight:700; margin-bottom:6px;">Attendu</div>
+        <div style="font-weight:700; margin-bottom:6px;">{html.escape(le)}</div>
         <pre style="white-space:pre-wrap; padding:10px; border:1px solid #ddd; border-radius:8px; background:#fafafa; overflow:auto;">
 <code class="language-{lang_hint}">{html.escape(exp_text)}</code>
         </pre>
       </div>
       <div style="flex:1; min-width:0;">
-        <div style="font-weight:700; margin-bottom:6px;">Saisi</div>
+        <div style="font-weight:700; margin-bottom:6px;">{html.escape(lp)}</div>
         <pre style="white-space:pre-wrap; padding:10px; border:1px solid #ddd; border-radius:8px; background:#fafafa; overflow:auto;">
 <code class="language-{lang_hint}">{html.escape(prov_text)}</code>
         </pre>
@@ -340,6 +428,9 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
     config = get_config()
     language = config.get("language", "english")
     texts = get_ui_texts(language)
+    labels = get_compare_labels(config)
+    show_anki = config.get("show_anki_compare", True)
+    show_code = config.get("show_code_compare", True)
     
     # Skip if AI is disabled
     if not config.get("enabled", True):
@@ -457,16 +548,18 @@ def render_enhanced_comparison(output, initial_expected, initial_provided, type_
         """
     
     # Affichage alternatif fidèle pour le code (en plus du diff Anki)
-    code_block = _code_compare_block(initial_expected, initial_provided, lang_hint="")
+    anki_section = f"""
+    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #6c757d;">
+    {output}
+    </div>
+    """ if show_anki else ""
+
+    code_block = _code_compare_block(initial_expected, initial_provided, lang_hint="", labels=labels) if show_code else ""
+        
     # Affichage simplifié des résultats
     enhanced_output = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto;">
-        
-        <!-- Comparaison par défaut d'Anki -->
-        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #6c757d;">
-            {output}
-        </div>
-        
+        {anki_section}
         {code_block}
         
         <!-- Analyse IA avec animation d'apparition -->
@@ -572,7 +665,10 @@ DEFAULT_CONFIG = {
     "openrouter_model": "deepseek/deepseek-r1:free",
     "enabled": True,
     "max_tokens": 200,
-    "temperature": 0.7
+    "temperature": 0.7,
+    "show_anki_compare": True,
+    "show_code_compare": True,
+    "ui_language": "auto",  # 'auto' | 'en' | 'fr' | 'es' | 'de' | 'pt' | 'it'
 }
 
 # **MODIFIÉ: Langues supportées avec nouveau texte pour le contexte de question**
@@ -1067,6 +1163,18 @@ def setup_config_menu():
         # Paramètres généraux en haut
         general_group = QVBoxLayout()
         
+        # Display options
+        compare_group = QVBoxLayout()
+        show_anki_chk = QCheckBox('Afficher la "Comparaison par défaut d\'Anki"')
+        show_anki_chk.setChecked(config.get("show_anki_compare", True))
+        compare_group.addWidget(show_anki_chk)
+
+        show_code_chk = QCheckBox('Afficher le "code_block" (comparaison code)')
+        show_code_chk.setChecked(config.get("show_code_compare", True))
+        compare_group.addWidget(show_code_chk)
+
+        layout.addLayout(compare_group)
+        
         # Sélecteur de fournisseur principal
         provider_layout = QHBoxLayout()
         provider_layout.addWidget(QLabel("AI Provider:"))
@@ -1251,6 +1359,8 @@ def setup_config_menu():
                 "max_tokens": tokens_spin.value(),
                 "temperature": temp_spin.value()
             }
+            new_config["show_anki_compare"] = show_anki_chk.isChecked()
+            new_config["show_code_compare"] = show_code_chk.isChecked()
             
             # Sauvegarder toutes les clés API et modèles
             for provider_key in PROVIDERS.keys():
