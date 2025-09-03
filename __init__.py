@@ -1234,8 +1234,8 @@ def setup_config_menu():
         tokens_layout = QHBoxLayout()
         tokens_layout.addWidget(QLabel("Max tokens:"))
         tokens_spin = QSpinBox()
-        tokens_spin.setRange(50, 4000)
-        tokens_spin.setValue(config.get("max_tokens", 200))
+        tokens_spin.setRange(300, 4000)
+        tokens_spin.setValue(max(config.get("max_tokens", 300), 300))
         tokens_layout.addWidget(tokens_spin)
         general_group.addLayout(tokens_layout)
         
